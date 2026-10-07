@@ -275,3 +275,12 @@ coverage/
 # Operating System files
 .DS_Store
 Thumbs.db
+
+__pycache__/
+*.pyc
+.env
+*.db
+backend/uploads/
+backend/app/static/*
+!backend/app/static/.gitkeep
+frontend/node_modules/
