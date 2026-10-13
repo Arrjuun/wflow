@@ -10,7 +10,7 @@ from fastapi.templating import Jinja2Templates
 from .config import settings
 from .db import Base, SessionLocal, engine
 from .errors import EngineError
-from .routers import auth, files, projects, tasks, users, workflows
+from .routers import auth, files, phases, projects, users, workflows
 from .seed import ensure_admin
 
 BASE = Path(__file__).parent
@@ -27,7 +27,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="Workflow Approval", lifespan=lifespan)
+app = FastAPI(title="CAF", lifespan=lifespan)
 
 
 @app.exception_handler(EngineError)
@@ -36,7 +36,7 @@ async def engine_error_handler(_: Request, exc: EngineError):
     return JSONResponse({"detail": detail}, status_code=exc.status)
 
 
-for r in (auth, users, workflows, projects, tasks, files):
+for r in (auth, users, workflows, projects, phases, files):
     app.include_router(r.router, prefix="/api/v1")
 
 if STATIC.exists():

@@ -15,6 +15,8 @@ class FieldError(ValueError):
 class FieldType:
     name = ""
     label = ""
+    has_value = True      # False for display-only types (heading)
+    conditionable = True  # can a branching condition test this field?
 
     def validate_config(self, config: dict) -> dict:
         return config or {}
@@ -39,7 +41,18 @@ def get_type(name: str) -> FieldType:
 
 
 def list_types() -> list[dict]:
-    return [{"name": t.name, "label": t.label} for t in REGISTRY.values()]
+    return [{"name": t.name, "label": t.label, "has_value": t.has_value, "conditionable": t.conditionable}
+            for t in REGISTRY.values()]
+
+
+def clean_config(type_name: str, config: dict | None) -> dict:
+    """Layout options shared by every type, plus the type's own options."""
+    config = config or {}
+    out = {k: str(config[k]).strip() for k in ("placeholder", "help") if str(config.get(k) or "").strip()}
+    if config.get("width") in ("half", "full"):
+        out["width"] = config["width"]
+    out.update(get_type(type_name).validate_config(config))
+    return out
 
 
 @register
@@ -135,6 +148,7 @@ class NumberField(FieldType):
 @register
 class FileField(FieldType):
     name, label = "file", "File upload"
+    conditionable = False
 
     def validate_config(self, config):
         out = {}
@@ -154,6 +168,76 @@ class FileField(FieldType):
             ext = asset.original_name.rsplit(".", 1)[-1].lower() if "." in asset.original_name else ""
             if ext not in config["accept"]:
                 raise FieldError(f"file type must be one of: {', '.join(config['accept'])}")
-        if ctx.get("instance_id"):
-            asset.instance_id = ctx["instance_id"]
+        if ctx.get("project_id"):
+            asset.project_id = ctx["project_id"]
         return {"file_id": asset.id, "name": asset.original_name}
+
+
+@register
+class HeadingField(FieldType):
+    """Section heading with optional text. Groups the fields below it; stores no value."""
+    name, label = "heading", "Section heading"
+    has_value, conditionable = False, False
+
+    def validate_config(self, config):
+        return {"text": str((config or {}).get("text", "")).strip()}
+
+    def clean_value(self, value, config, ctx):
+        raise FieldError("a heading has no value")
+
+
+COLUMN_TYPES = ("text", "dropdown", "number")
+
+
+@register
+class TableField(FieldType):
+    """Repeating rows, e.g. a PIRT: phenomenon | ranking | justification."""
+    name, label = "table", "Table (repeating rows)"
+    conditionable = False
+
+    def validate_config(self, config):
+        cols, keys = [], set()
+        for c in (config or {}).get("columns", []):
+            key, label = str(c.get("key", "")).strip(), str(c.get("label", "")).strip()
+            ctype = c.get("type", "text")
+            if not key or key in keys:
+                raise FieldError("table columns need unique keys")
+            if ctype not in COLUMN_TYPES:
+                raise FieldError(f"column type must be one of {', '.join(COLUMN_TYPES)}")
+            col = {"key": key, "label": label or key, "type": ctype}
+            if ctype == "dropdown":
+                col["options"] = [str(o).strip() for o in c.get("options", []) if str(o).strip()]
+                if not col["options"]:
+                    raise FieldError(f"column '{col['label']}' needs options")
+            cols.append(col)
+            keys.add(key)
+        if not cols:
+            raise FieldError("a table needs at least one column")
+        return {"columns": cols}
+
+    def clean_value(self, value, config, ctx):
+        if not isinstance(value, list):
+            raise FieldError("must be a list of rows")
+        cols = {c["key"]: c for c in config.get("columns", [])}
+        rows = []
+        for row in value:
+            if not isinstance(row, dict):
+                raise FieldError("each row must be an object")
+            clean = {}
+            for key, col in cols.items():
+                v = row.get(key)
+                if v is None or (isinstance(v, str) and not v.strip()):
+                    continue
+                if col["type"] == "dropdown" and v not in col["options"]:
+                    raise FieldError(f"'{col['label']}' must be one of the listed options")
+                if col["type"] == "number":
+                    try:
+                        v = float(v)
+                    except (TypeError, ValueError):
+                        raise FieldError(f"'{col['label']}' must be a number")
+                clean[key] = v if col["type"] == "number" else str(v).strip()
+            if clean:
+                rows.append(clean)
+        if not rows:
+            return None  # treated as empty
+        return rows

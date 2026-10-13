@@ -6,8 +6,8 @@ from ..db import get_db
 from ..conditions import validate_graph
 from ..engine import audit
 from ..errors import EngineError
-from ..fields import FieldError, get_type, list_types
-from ..models import Project, StepField, StepTransition, User, Workflow, WorkflowStep, now
+from ..fields import FieldError, clean_config, get_type, list_types
+from ..models import PhaseTransition, StepField, User, Workflow, WorkflowPhase, WorkflowStep, now
 from ..schemas import ReviewIn, WorkflowCreate, WorkflowIn
 from ..security import get_current_user, require_admin
 from ..serializers import graph_from_workflow, workflow_out, workflow_summary
@@ -33,38 +33,42 @@ def _owner_or_admin(wf: Workflow, user: User):
 
 
 def apply_graph(db: Session, wf: Workflow, data: WorkflowIn) -> None:
-    keys = [s.key.strip() for s in data.steps]
+    keys = [p.key.strip() for p in data.phases]
     if len(set(keys)) != len(keys):
-        raise EngineError(422, ["Step keys must be unique"])
-    for s in data.steps:
-        fkeys = [f.key.strip() for f in s.fields]
+        raise EngineError(422, ["Phase keys must be unique"])
+    for p in data.phases:
+        fkeys = [f.key.strip() for s in p.steps for f in s.fields]
         if len(set(fkeys)) != len(fkeys):
-            raise EngineError(422, [f"Step {s.key}: field keys must be unique"])
+            raise EngineError(422, [f"Phase {p.key}: field keys must be unique within the phase"])
     wf.title, wf.description = data.title.strip(), data.description
     wf.transitions.clear()
     db.flush()
-    wf.steps.clear()
+    wf.phases.clear()
     db.flush()
     by_key = {}
-    for i, s in enumerate(data.steps):
-        step = WorkflowStep(key=s.key.strip(), name=s.name.strip() or s.key.strip(), order=i,
-                            is_start=s.is_start, is_terminal=s.is_terminal, approval_policy=s.approval_policy)
-        for j, f in enumerate(s.fields):
-            try:
-                config = get_type(f.type).validate_config(f.config)
-            except (FieldError, ValueError, TypeError) as e:
-                raise EngineError(422, [f"Step {s.key}, field '{f.label or f.key}': {e}"])
-            step.fields.append(StepField(key=f.key.strip(), type=f.type, label=f.label.strip() or f.key.strip(),
-                                         required=f.required, config=config, order=j))
-        wf.steps.append(step)
-        by_key[step.key] = step
+    for i, p in enumerate(data.phases):
+        phase = WorkflowPhase(key=p.key.strip(), name=p.name.strip() or p.key.strip(), order=i, is_start=p.is_start,
+                              is_terminal=p.is_terminal, requires_gate=p.requires_gate)
+        for j, s in enumerate(p.steps):
+            step = WorkflowStep(name=s.name.strip(), order=j)
+            for k, f in enumerate(s.fields):
+                try:
+                    config = clean_config(f.type, f.config)
+                except (FieldError, ValueError, TypeError) as e:
+                    raise EngineError(422, [f"{p.name or p.key} / {s.name} / '{f.label or f.key}': {e}"])
+                step.fields.append(StepField(key=f.key.strip(), type=f.type, label=f.label.strip() or f.key.strip(),
+                                             required=f.required and get_type(f.type).has_value, config=config, order=k))
+            phase.steps.append(step)
+        wf.phases.append(phase)
+        by_key[phase.key] = phase
     db.flush()
-    for t in data.transitions:
+    for i, t in enumerate(data.transitions):
         a, b = by_key.get(t.from_key), by_key.get(t.to_key)
         if not a or not b:
-            raise EngineError(422, ["A transition points to a step that does not exist"])
-        wf.transitions.append(StepTransition(from_step_id=a.id, to_step_id=b.id, condition=t.condition or None,
-                                             priority=t.priority, is_default=t.is_default))
+            raise EngineError(422, ["A path points to a phase that does not exist"])
+        wf.transitions.append(PhaseTransition(from_phase_id=a.id, to_phase_id=b.id, order=i,
+                                              condition=None if t.is_default else (t.condition or None),
+                                              is_default=t.is_default))
     db.flush()
 
 
@@ -193,7 +197,7 @@ def clone_workflow(wf_id: int, user: User = Depends(get_current_user), db: Sessi
     db.add(copy)
     db.flush()
     apply_graph(db, copy, WorkflowIn(title=data["title"], description=data["description"],
-                                     steps=data["steps"], transitions=data["transitions"]))
+                                     phases=data["phases"], transitions=data["transitions"]))
     audit(db, user, "workflow.cloned", "workflow", copy.id, {"from": src.id})
     db.commit()
     return workflow_out(copy)

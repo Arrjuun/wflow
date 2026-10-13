@@ -1,5 +1,4 @@
 """Pure logic (no database): condition evaluation and workflow graph validation."""
-from typing import Any
 
 OPS = {"eq", "ne", "gt", "gte", "lt", "lte", "in", "contains"}
 
@@ -19,9 +18,7 @@ def _pair(a, b):
 
 
 def eval_rule(rule: dict, values: dict) -> bool:
-    op = rule.get("op")
-    actual = values.get(rule.get("field"))
-    expected = rule.get("value")
+    op, actual, expected = rule.get("op"), values.get(rule.get("field")), rule.get("value")
     if actual is None:
         return False
     if op == "in":
@@ -30,9 +27,7 @@ def eval_rule(rule: dict, values: dict) -> bool:
     if op == "contains":
         return str(expected).lower() in str(actual).lower()
     a, b = _pair(actual, expected)
-    return {
-        "eq": a == b, "ne": a != b, "gt": a > b, "gte": a >= b, "lt": a < b, "lte": a <= b,
-    }.get(op, False)
+    return {"eq": a == b, "ne": a != b, "gt": a > b, "gte": a >= b, "lt": a < b, "lte": a <= b}.get(op, False)
 
 
 def evaluate(condition: dict | None, values: dict) -> bool:
@@ -46,66 +41,78 @@ def evaluate(condition: dict | None, values: dict) -> bool:
     return eval_rule(condition, values)
 
 
-def _rules(condition: dict | None) -> list[dict]:
+def _rules(condition):
     if not condition:
         return []
     return condition.get("all") or condition.get("any") or ([condition] if "field" in condition else [])
 
 
-def effective_default(outgoing: list[dict]) -> list[dict]:
-    """Transitions that act as the fallback: flagged default, or the only unconditional one."""
-    flagged = [t for t in outgoing if t.get("is_default")]
-    if flagged:
-        return flagged
-    return [t for t in outgoing if len(outgoing) == 1 and not t.get("condition")]
+def is_default(t: dict, outgoing: list[dict]) -> bool:
+    """A path is the default if marked so, or if it is the only path and has no condition."""
+    return bool(t.get("is_default")) or (len(outgoing) == 1 and not t.get("condition"))
 
 
-def validate_graph(steps: list[dict], transitions: list[dict]) -> list[str]:
-    """steps: [{key, name, is_start, is_terminal, fields:[{key,label}]}]
+def choose(outgoing: list[dict], values: dict):
+    """Conditional paths win (in list order); otherwise the default path."""
+    for t in outgoing:
+        if not is_default(t, outgoing) and evaluate(t.get("condition"), values):
+            return t
+    return next((t for t in outgoing if is_default(t, outgoing)), None)
+
+
+def validate_graph(phases: list[dict], transitions: list[dict]) -> list[str]:
+    """phases: [{key, name, is_start, is_terminal, steps:[{name, fields:[{key,label,type,conditionable}]}]}]
     transitions: [{from_key, to_key, condition, is_default}]"""
     errors: list[str] = []
-    if not steps:
-        return ["Add at least one step."]
-    keys = [s["key"] for s in steps]
+    if not phases:
+        return ["Add at least one phase."]
+    keys = [p["key"] for p in phases]
     if len(set(keys)) != len(keys):
-        errors.append("Step keys must be unique.")
-    by_key = {s["key"]: s for s in steps}
-
-    starts = [s for s in steps if s["is_start"]]
+        errors.append("Phase keys must be unique.")
+    by_key = {p["key"]: p for p in phases}
+    starts = [p for p in phases if p["is_start"]]
     if len(starts) != 1:
-        errors.append("Exactly one step must be marked as the start step.")
-    if not any(s["is_terminal"] for s in steps):
-        errors.append("Mark at least one step as an end step.")
+        errors.append("Exactly one phase must be marked as the start phase.")
+    if not any(p["is_terminal"] for p in phases):
+        errors.append("Mark at least one phase as an end phase.")
 
     out: dict[str, list[dict]] = {k: [] for k in by_key}
     for t in transitions:
         if t["from_key"] not in by_key or t["to_key"] not in by_key:
-            errors.append("A transition points to a step that does not exist.")
+            errors.append("A path points to a phase that does not exist.")
             continue
         out[t["from_key"]].append(t)
 
-    for s in steps:
-        k, outgoing = s["key"], out[s["key"]]
-        label = f"Step {k} ({s['name']})"
-        if s["is_terminal"]:
+    for p in phases:
+        label = f"Phase {p['key']} ({p['name']})"
+        fields = [f for s in p.get("steps", []) for f in s.get("fields", [])]
+        if not p.get("steps"):
+            errors.append(f"{label} needs at least one step.")
+        fkeys = [f["key"] for f in fields]
+        if len(set(fkeys)) != len(fkeys):
+            errors.append(f"{label}: field keys must be unique within the phase.")
+        outgoing = out[p["key"]]
+        if p["is_terminal"]:
             if outgoing:
-                errors.append(f"{label} is an end step and cannot have outgoing transitions.")
+                errors.append(f"{label} is an end phase and cannot have outgoing paths.")
             continue
         if not outgoing:
-            errors.append(f"{label} has no outgoing transition.")
+            errors.append(f"{label} has no outgoing path.")
             continue
-        defaults = effective_default(outgoing)
+        defaults = [t for t in outgoing if is_default(t, outgoing)]
         if len(defaults) != 1:
-            errors.append(f"{label} needs exactly one default transition (found {len(defaults)}).")
-        field_keys = {f["key"] for f in s.get("fields", [])}
+            errors.append(f"{label} needs exactly one default path (found {len(defaults)}).")
+        usable = {f["key"] for f in fields if f.get("conditionable", True)}
         for t in outgoing:
-            if t not in defaults and not t.get("condition"):
-                errors.append(f"{label}: a non-default transition to {t['to_key']} needs a condition.")
+            if t in defaults:
+                continue
+            if not t.get("condition"):
+                errors.append(f"{label}: the path to {t['to_key']} needs a condition or must be the default.")
             for r in _rules(t.get("condition")):
                 if r.get("op") not in OPS:
                     errors.append(f"{label}: unknown operator '{r.get('op')}'.")
-                if r.get("field") not in field_keys:
-                    errors.append(f"{label}: condition uses field '{r.get('field')}' which is not on this step.")
+                if r.get("field") not in usable:
+                    errors.append(f"{label}: condition uses '{r.get('field')}', which is not a usable field in this phase.")
 
     if len(starts) == 1:
         seen, stack = set(), [starts[0]["key"]]
@@ -117,5 +124,5 @@ def validate_graph(steps: list[dict], transitions: list[dict]) -> list[str]:
             stack.extend(t["to_key"] for t in out.get(cur, []) if t["to_key"] in by_key)
         for k in keys:
             if k not in seen:
-                errors.append(f"Step {k} cannot be reached from the start step.")
+                errors.append(f"Phase {k} cannot be reached from the start phase.")
     return errors

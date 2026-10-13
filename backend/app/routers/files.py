@@ -2,10 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from ..access import can_view_instance
+from ..access import can_view_project
 from ..config import settings
 from ..db import get_db
-from ..models import FileAsset, StepInstance, User
+from ..models import FileAsset, Project, User
 from ..security import get_current_user
 from ..storage import storage
 
@@ -38,9 +38,9 @@ def download(file_id: int, user: User = Depends(get_current_user), db: Session =
     if not asset:
         raise HTTPException(404, "File not found")
     allowed = user.role == "admin" or asset.uploaded_by == user.id
-    if not allowed and asset.instance_id:
-        inst = db.get(StepInstance, asset.instance_id)
-        allowed = bool(inst) and can_view_instance(inst, user)
+    if not allowed and asset.project_id:
+        project = db.get(Project, asset.project_id)
+        allowed = bool(project) and can_view_project(project, user)
     if not allowed:
         raise HTTPException(403, "Not allowed")
     return FileResponse(storage.path(asset.storage_key), filename=asset.original_name,

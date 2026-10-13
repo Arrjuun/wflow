@@ -33,26 +33,30 @@ class FieldIn(BaseModel):
 
 
 class StepIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    fields: list[FieldIn] = []
+
+
+class PhaseIn(BaseModel):
     key: str = Field(min_length=1, max_length=40)
     name: str = ""
     is_start: bool = False
     is_terminal: bool = False
-    approval_policy: Literal["all", "any"] = "all"
-    fields: list[FieldIn] = []
+    requires_gate: bool = True
+    steps: list[StepIn] = []
 
 
 class TransitionIn(BaseModel):
     from_key: str
     to_key: str
     condition: dict | None = None
-    priority: int = 0
     is_default: bool = False
 
 
 class WorkflowIn(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: str = ""
-    steps: list[StepIn] = []
+    phases: list[PhaseIn] = []
     transitions: list[TransitionIn] = []
 
 
@@ -65,11 +69,37 @@ class ReviewIn(BaseModel):
     comment: str = ""
 
 
-class ProjectIn(BaseModel):
-    workflow_id: int
+class MemberIn(BaseModel):
+    user_id: int
+    role: Literal["author", "approver", "authorizer"]
+
+
+class ProjectDetailsIn(BaseModel):
+    """Name plus any details the project creator defines (e.g. start date, FEM registration number)."""
     name: str = Field(min_length=1, max_length=200)
-    assignments: dict[str, int]
-    approvers: dict[str, list[int]] = {}
+    detail_fields: list[FieldIn] = []
+    detail_values: dict[str, Any] = {}
+
+
+class ProjectIn(ProjectDetailsIn):
+    workflow_id: int
+    members: list[MemberIn]
+
+
+class MembersIn(BaseModel):
+    members: list[MemberIn]
+
+
+class ReferenceIn(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    url: str = Field(default="", max_length=1000)
+    file_id: int | None = None
+    note: str = ""
+
+
+class LessonIn(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    body: str = ""
 
 
 class ValuesIn(BaseModel):
