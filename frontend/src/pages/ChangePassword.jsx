@@ -21,7 +21,7 @@ export default function ChangePassword() {
     }
   };
   return (
-    <div className={user.must_change_password ? "auth" : ""}>
+    <div className={user.must_change_password ? "auth" : "page"}>
       <form className="card" style={{ maxWidth: 420 }} onSubmit={submit}>
         <h1>Change password</h1>
         {user.must_change_password && <Alert tone="warn">An admin reset your password. Choose a new one to continue.</Alert>}

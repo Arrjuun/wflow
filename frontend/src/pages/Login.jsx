@@ -18,7 +18,7 @@ export default function Login() {
     <div className="auth">
       <form className="card" onSubmit={submit}>
         <h1>Sign in</h1>
-        <p className="muted">Workflow Desk</p>
+        <p className="muted">CAF</p>
         <Errors error={error} />
         <div className="field">
           <label htmlFor="email">Email</label>

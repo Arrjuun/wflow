@@ -6,27 +6,23 @@ export default function Layout() {
   const user = useSelector((s) => s.auth.user);
   const dispatch = useDispatch();
   const navigate = useNavigate();
-  const link = ({ isActive }) => (isActive ? "active" : undefined);
-
-  const signOut = async () => {
-    await dispatch(logout());
-    navigate("/login");
-  };
+  const signOut = async () => { await dispatch(logout()); navigate("/login"); };
 
   return (
-    <div className="shell">
-      <nav className="side" aria-label="Main">
-        <div className="brand">Workflow Desk</div>
-        <NavLink to="/" end className={link}>My work</NavLink>
-        <NavLink to="/projects" className={link}>Projects</NavLink>
-        <NavLink to="/workflows" className={link}>Workflows</NavLink>
-        {user.role === "admin" && <NavLink to="/users" className={link}>Users</NavLink>}
-        <div className="spacer" />
-        <div className="who">{user.name}{user.role === "admin" ? " (admin)" : ""}</div>
-        <NavLink to="/change-password" className={link}>Change password</NavLink>
-        <button className="link" onClick={signOut}>Sign out</button>
-      </nav>
-      <main className="main"><Outlet /></main>
+    <div className="app">
+      <header className="topbar">
+        <span className="brand">CAF</span>
+        <nav aria-label="Main">
+          <NavLink to="/" end>My work</NavLink>
+          <NavLink to="/projects">Projects</NavLink>
+          <NavLink to="/workflows">Workflows</NavLink>
+          {user.role === "admin" && <NavLink to="/users">Users</NavLink>}
+        </nav>
+        <span className="who">
+          Welcome, {user.name} | <NavLink to="/change-password">Password</NavLink> | <button className="linkish" onClick={signOut}>Logout</button>
+        </span>
+      </header>
+      <Outlet />
     </div>
   );
 }

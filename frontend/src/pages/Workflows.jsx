@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { Link, useNavigate } from "react-router-dom";
 import { createWorkflow, fetchWorkflows } from "../slices/workflowsSlice";
-import { Chip, Empty, Errors } from "../components/Ui";
+import { Chip, Empty, Errors, Page } from "../components/Ui";
 
 export default function Workflows() {
   const dispatch = useDispatch();
@@ -20,7 +20,7 @@ export default function Workflows() {
   const pendingCount = list.filter((w) => w.status === "pending_approval").length;
 
   return (
-    <>
+    <Page>
       <div className="page-head"><div><h1>Workflows</h1>
         <p className="muted">Reusable step-by-step processes. An admin must approve a workflow before projects can use it.</p></div></div>
       <Errors error={error} />
@@ -32,19 +32,19 @@ export default function Workflows() {
       <div className="card flat">
         {!list.length ? <Empty>{loading ? "Loading…" : "No workflows yet."}</Empty> : (
           <table>
-            <thead><tr><th>Title</th><th>Version</th><th>Status</th><th>Owner</th><th>Steps</th></tr></thead>
+            <thead><tr><th>Title</th><th>Version</th><th>Status</th><th>Owner</th><th>Phases</th></tr></thead>
             <tbody>
               {list.map((w) => (
                 <tr key={w.id}>
                   <td><Link to={`/workflows/${w.id}`}>{w.title}</Link></td>
                   <td>v{w.version}</td><td><Chip value={w.status} /></td>
-                  <td>{w.owner?.name}</td><td>{w.step_count}</td>
+                  <td>{w.owner?.name}</td><td>{w.phase_count}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
       </div>
-    </>
+    </Page>
   );
 }

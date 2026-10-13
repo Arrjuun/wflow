@@ -1,41 +1,33 @@
 import { useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { Link } from "react-router-dom";
-import { fetchApprovals, fetchTasks } from "../slices/tasksSlice";
-import { Empty, fmt } from "../components/Ui";
-
-function Table({ rows, action, empty }) {
-  if (!rows.length) return <div className="card"><Empty>{empty}</Empty></div>;
-  return (
-    <div className="card flat">
-      <table>
-        <thead><tr><th>Project</th><th>Step</th><th>{action === "Review" ? "Submitted" : "Round"}</th><th /></tr></thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.id}>
-              <td><Link to={`/projects/${r.project_id}`}>{r.project_name}</Link></td>
-              <td>{r.step_key}. {r.step_name}</td>
-              <td>{action === "Review" ? fmt(r.submitted_at) : r.round > 1 ? `Rework (round ${r.round})` : "New"}</td>
-              <td><Link className="btn small" to={`/steps/${r.id}`} style={{ textDecoration: "none", display: "inline-block", padding: "4px 10px", background: "var(--accent)", color: "#fff", borderRadius: 6 }}>{action}</Link></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
+import { fetchActions } from "../slices/phasesSlice";
+import { Empty, Page, ROLE_LABEL } from "../components/Ui";
 
 export default function MyWork() {
   const dispatch = useDispatch();
-  const { tasks, approvals } = useSelector((s) => s.tasks);
-  useEffect(() => { dispatch(fetchTasks()); dispatch(fetchApprovals()); }, [dispatch]);
+  const actions = useSelector((s) => s.phases.actions);
+  useEffect(() => { dispatch(fetchActions()); }, [dispatch]);
   return (
-    <>
-      <div className="page-head"><div><h1>My work</h1><p className="muted">Steps assigned to you and steps waiting for your approval.</p></div></div>
-      <h2>To fill in</h2>
-      <Table rows={tasks} action="Open" empty="Nothing assigned to you right now." />
-      <h2>To approve</h2>
-      <Table rows={approvals} action="Review" empty="Nothing waiting for your approval." />
-    </>
+    <Page>
+      <div className="page-head"><div><h1>My work</h1><p className="muted">Steps to fill in, steps to approve and phase sign-offs waiting for you.</p></div></div>
+      <div className="card flat">
+        {!actions.length ? <Empty>Nothing is waiting for you right now.</Empty> : (
+          <table>
+            <thead><tr><th>Project</th><th>Action</th><th>As</th><th /></tr></thead>
+            <tbody>
+              {actions.map((a) => (
+                <tr key={`${a.project_id}-${a.role}-${a.step_instance_id}`}>
+                  <td><Link to={`/projects/${a.project_id}`}>{a.project_name}</Link></td>
+                  <td>{a.action}</td>
+                  <td>{ROLE_LABEL[a.role]}</td>
+                  <td><Link className="btn-link" to={a.kind === "signoff" ? `/projects/${a.project_id}/phases/${a.phase_key}/gate` : `/projects/${a.project_id}/phases/${a.phase_key}?step=${a.step_instance_id}`}>Open</Link></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </Page>
   );
 }

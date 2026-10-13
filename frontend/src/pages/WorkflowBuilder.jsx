@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useNavigate, useParams } from "react-router-dom";
 import {
@@ -6,15 +6,17 @@ import {
   rejectWorkflow, retireWorkflow, saveWorkflow, submitWorkflow,
 } from "../slices/workflowsSlice";
 import ConditionEditor from "../components/ConditionEditor";
-import { Alert, Chip, Errors } from "../components/Ui";
-import { fieldUI } from "../fields/registry";
+import { Alert, Chip, Errors, Page } from "../components/Ui";
+import { CONDITIONABLE } from "../fields/registry";
+import FieldDefEditor from "../components/FieldDefEditor";
 
-const slug = (s) => s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
 const toDraft = (wf) => ({
   title: wf.title, description: wf.description,
-  steps: wf.steps.map((s) => ({ key: s.key, name: s.name, is_start: s.is_start, is_terminal: s.is_terminal,
-    approval_policy: s.approval_policy, fields: s.fields.map(({ key, type, label, required, config }) => ({ key, type, label, required, config })) })),
-  transitions: wf.transitions.map(({ from_key, to_key, condition, priority, is_default }) => ({ from_key, to_key, condition, priority, is_default })),
+  phases: wf.phases.map((p) => ({
+    key: p.key, name: p.name, is_start: p.is_start, is_terminal: p.is_terminal, requires_gate: p.requires_gate,
+    steps: p.steps.map((s) => ({ name: s.name, fields: s.fields.map(({ key, type, label, required, config }) => ({ key, type, label, required, config })) })),
+  })),
+  transitions: wf.transitions.map(({ from_key, to_key, condition, is_default }) => ({ from_key, to_key, condition, is_default })),
 });
 
 export default function WorkflowBuilder() {
@@ -24,45 +26,58 @@ export default function WorkflowBuilder() {
   const { current: wf, fieldTypes, busy, error, errors } = useSelector((s) => s.workflows);
   const user = useSelector((s) => s.auth.user);
   const [draft, setDraft] = useState(null);
+  const [open, setOpen] = useState(0);
   const [message, setMessage] = useState("");
 
   useEffect(() => { dispatch(clearCurrent()); dispatch(fetchWorkflow(id)); dispatch(fetchFieldTypes()); }, [dispatch, id]);
   useEffect(() => { if (wf && String(wf.id) === id) setDraft(toDraft(wf)); }, [wf, id]);
 
-  const isOwner = wf && wf.owner?.id === user.id;
-  const editable = wf && (isOwner || user.role === "admin") && ["draft", "rejected"].includes(wf.status);
+  if (!wf || !draft || String(wf.id) !== id) return <Page><Errors error={error} /></Page>;
+
   const isAdmin = user.role === "admin";
-  const stepFields = useMemo(() => Object.fromEntries((draft?.steps || []).map((s) => [s.key, s.fields])), [draft]);
-
-  if (!wf || !draft || String(wf.id) !== id) return <Errors error={error} />;
-
+  const editable = (wf.owner?.id === user.id || isAdmin) && ["draft", "rejected"].includes(wf.status);
   const patch = (p) => setDraft((d) => ({ ...d, ...p }));
-  const patchStep = (i, p) => patch({ steps: draft.steps.map((s, j) => (j === i ? { ...s, ...p } : s)) });
-  const patchField = (i, k, p) => patchStep(i, { fields: draft.steps[i].fields.map((f, j) => (j === k ? { ...f, ...p } : f)) });
-  const patchTrans = (i, p) => patch({ transitions: draft.transitions.map((t, j) => (j === i ? { ...t, ...p } : t)) });
+  const patchPhase = (i, p) => setDraft((d) => ({ ...d, phases: d.phases.map((ph, j) => (j === i ? { ...ph, ...p } : ph)) }));
+  const patchStep = (i, k, p) => patchPhase(i, { steps: draft.phases[i].steps.map((s, j) => (j === k ? { ...s, ...p } : s)) });
+  const patchField = (i, k, n, p) => patchStep(i, k, { fields: draft.phases[i].steps[k].fields.map((f, j) => (j === n ? { ...f, ...p } : f)) });
+  const patchPath = (i, p) => patch({ transitions: draft.transitions.map((t, j) => (j === i ? { ...t, ...p } : t)) });
 
-  const addStep = () => {
-    let n = draft.steps.length + 1;
-    while (draft.steps.some((s) => s.key === String(n))) n++;
-    patch({ steps: [...draft.steps, { key: String(n), name: `Step ${n}`, is_start: !draft.steps.length, is_terminal: false, approval_policy: "all", fields: [] }] });
+  const addPhase = () => {
+    let n = draft.phases.length + 1;
+    while (draft.phases.some((p) => p.key === String(n))) n++;
+    patch({ phases: [...draft.phases, { key: String(n), name: "New phase", is_start: !draft.phases.length, is_terminal: false, requires_gate: true,
+      steps: [{ name: "New step", fields: [] }] }] });
+    setOpen(draft.phases.length);
   };
-  const removeStep = (i) => {
-    const key = draft.steps[i].key;
-    patch({ steps: draft.steps.filter((_, j) => j !== i), transitions: draft.transitions.filter((t) => t.from_key !== key && t.to_key !== key) });
+  const removePhase = (i) => {
+    const key = draft.phases[i].key;
+    patch({ phases: draft.phases.filter((_, j) => j !== i), transitions: draft.transitions.filter((t) => t.from_key !== key && t.to_key !== key) });
   };
-  const setStart = (i) => patch({ steps: draft.steps.map((s, j) => ({ ...s, is_start: j === i })) });
+  const movePhase = (i, d) => {
+    const ps = [...draft.phases];
+    [ps[i], ps[i + d]] = [ps[i + d], ps[i]];
+    patch({ phases: ps });
+    setOpen(i + d);
+  };
   const renameKey = (i, newKey) => {
-    const old = draft.steps[i].key;
+    const old = draft.phases[i].key;
     patch({
-      steps: draft.steps.map((s, j) => (j === i ? { ...s, key: newKey } : s)),
+      phases: draft.phases.map((p, j) => (j === i ? { ...p, key: newKey } : p)),
       transitions: draft.transitions.map((t) => ({ ...t, from_key: t.from_key === old ? newKey : t.from_key, to_key: t.to_key === old ? newKey : t.to_key })),
     });
   };
-  const addField = (i) => {
-    const n = draft.steps[i].fields.length + 1;
-    patchStep(i, { fields: [...draft.steps[i].fields, { key: `field_${n}`, type: "text", label: "", required: false, config: {} }] });
+  const addStep = (i) => patchPhase(i, { steps: [...draft.phases[i].steps, { name: "New step", fields: [] }] });
+  const addField = (i, k) => {
+    const n = draft.phases[i].steps.reduce((c, s) => c + s.fields.length, 0) + 1;
+    patchStep(i, k, { fields: [...draft.phases[i].steps[k].fields, { key: `field_${n}`, type: "text", label: "", required: false, config: { width: "full" } }] });
   };
-  const addTransition = () => patch({ transitions: [...draft.transitions, { from_key: draft.steps[0]?.key || "", to_key: draft.steps[1]?.key || "", condition: null, priority: draft.transitions.length, is_default: false }] });
+  const linkInOrder = () => {
+    const ps = draft.phases;
+    patch({ transitions: ps.slice(0, -1).filter((p) => !p.is_terminal).map((p, i) => ({ from_key: p.key, to_key: ps[i + 1].key, condition: null, is_default: false })) });
+  };
+  const pathFields = (fromKey) => (draft.phases.find((p) => p.key === fromKey)?.steps || [])
+    .flatMap((s) => s.fields).filter((f) => CONDITIONABLE.includes(f.type));
+  const outCount = (key) => draft.transitions.filter((t) => t.from_key === key).length;
 
   const save = async () => {
     const res = await dispatch(saveWorkflow({ id: wf.id, data: draft }));
@@ -70,32 +85,23 @@ export default function WorkflowBuilder() {
     return res;
   };
   const submit = async () => {
-    const res = await save();
-    if (!saveWorkflow.fulfilled.match(res)) return;
-    const sub = await dispatch(submitWorkflow(wf.id));
-    if (submitWorkflow.fulfilled.match(sub)) setMessage(user.role === "admin" ? "Submitted. You can approve it below." : "Submitted for admin approval");
+    if (!saveWorkflow.fulfilled.match(await save())) return;
+    if (submitWorkflow.fulfilled.match(await dispatch(submitWorkflow(wf.id)))) setMessage(isAdmin ? "Submitted. You can approve it now." : "Submitted for admin approval");
   };
   const clone = async () => {
     const res = await dispatch(cloneWorkflow(wf.id));
     if (cloneWorkflow.fulfilled.match(res)) navigate(`/workflows/${res.payload.id}`);
   };
-  const reject = () => {
-    const comment = window.prompt("What should the owner change?");
-    if (comment) dispatch(rejectWorkflow({ id: wf.id, comment }));
-  };
+  const reject = () => { const c = window.prompt("What should the owner change?"); if (c) dispatch(rejectWorkflow({ id: wf.id, comment: c })); };
   const remove = async () => {
     if (!window.confirm("Delete this workflow?")) return;
-    const res = await dispatch(deleteWorkflow(wf.id));
-    if (deleteWorkflow.fulfilled.match(res)) navigate("/workflows");
+    if (deleteWorkflow.fulfilled.match(await dispatch(deleteWorkflow(wf.id)))) navigate("/workflows");
   };
 
   return (
-    <>
+    <Page>
       <div className="page-head">
-        <div>
-          <h1>{wf.title} <Chip value={wf.status} /></h1>
-          <p className="muted">Version {wf.version} · owner {wf.owner?.name}</p>
-        </div>
+        <div><h1>{wf.title} <Chip value={wf.status} /></h1><p className="muted">Version {wf.version}, owner {wf.owner?.name}</p></div>
         <div className="actions">
           {editable && <>
             <button className="btn secondary" disabled={busy} onClick={save}>Save</button>
@@ -108,87 +114,91 @@ export default function WorkflowBuilder() {
           {!editable && <button className="btn secondary" disabled={busy} onClick={clone}>Clone to edit</button>}
         </div>
       </div>
-
       <Errors error={error} errors={errors} />
       {message && !error && !errors && <Alert tone="ok">{message}</Alert>}
       {wf.status === "rejected" && wf.review_comment && <Alert tone="warn">Rejected: {wf.review_comment}</Alert>}
       {wf.status === "pending_approval" && <Alert tone="warn">Waiting for admin approval. It cannot be edited until reviewed.</Alert>}
       {wf.status === "approved" && <Alert tone="ok">Approved workflows are read-only. Clone it to make changes as a new version.</Alert>}
 
-      <div className="card">
-        <div className="field"><label htmlFor="t">Title</label>
-          <input id="t" disabled={!editable} value={draft.title} onChange={(e) => patch({ title: e.target.value })} /></div>
-        <div className="field"><label htmlFor="d">Description</label>
-          <textarea id="d" disabled={!editable} value={draft.description} onChange={(e) => patch({ description: e.target.value })} /></div>
-      </div>
+      <section className="card">
+        <div className="field"><label htmlFor="t">Title</label><input id="t" disabled={!editable} value={draft.title} onChange={(e) => patch({ title: e.target.value })} /></div>
+        <div className="field"><label htmlFor="d">Description</label><textarea id="d" disabled={!editable} value={draft.description} onChange={(e) => patch({ description: e.target.value })} /></div>
+      </section>
 
-      <h2>Steps</h2>
-      {draft.steps.map((s, i) => (
-        <div key={i} className={`step-card ${s.is_start ? "start" : s.is_terminal ? "end" : ""}`}>
-          <div className="row">
-            <div style={{ flex: "0 0 90px" }}><label>Key</label>
-              <input disabled={!editable} value={s.key} onChange={(e) => renameKey(i, e.target.value)} /></div>
-            <div style={{ flex: "2 1 220px" }}><label>Step name</label>
-              <input disabled={!editable} value={s.name} onChange={(e) => patchStep(i, { name: e.target.value })} /></div>
-            <div><label>Approval</label>
-              <select disabled={!editable} value={s.approval_policy} onChange={(e) => patchStep(i, { approval_policy: e.target.value })}>
-                <option value="all">All approvers must approve</option><option value="any">Any one approver</option>
-              </select></div>
-          </div>
-          <div className="actions" style={{ margin: "10px 0" }}>
-            <label className="check"><input type="radio" name="start" disabled={!editable} checked={s.is_start} onChange={() => setStart(i)} /> Start step</label>
-            <label className="check"><input type="checkbox" disabled={!editable} checked={s.is_terminal} onChange={(e) => patchStep(i, { is_terminal: e.target.checked })} /> End step</label>
-            {editable && <button className="btn danger small" onClick={() => removeStep(i)}>Remove step</button>}
-          </div>
-
-          <h3>Fields</h3>
-          {!s.fields.length && <p className="muted small">No fields. The assignee just submits the step.</p>}
-          {s.fields.map((f, k) => {
-            const { ConfigEditor } = fieldUI(f.type);
-            return (
-              <div className="field-row" key={k}>
-                <div><label>Type</label>
-                  <select disabled={!editable} value={f.type} onChange={(e) => patchField(i, k, { type: e.target.value, config: {} })}>
-                    {fieldTypes.map((t) => <option key={t.name} value={t.name}>{fieldUI(t.name).label || t.label}</option>)}
-                  </select></div>
-                <div><label>Label</label>
-                  <input disabled={!editable} value={f.label}
-                    onChange={(e) => patchField(i, k, { label: e.target.value, key: slug(e.target.value) || f.key })} /></div>
-                <div><label>Key (used in conditions)</label>
-                  <input disabled={!editable} value={f.key} onChange={(e) => patchField(i, k, { key: slug(e.target.value) })} /></div>
-                <label className="check"><input type="checkbox" disabled={!editable} checked={f.required} onChange={(e) => patchField(i, k, { required: e.target.checked })} /> Required</label>
-                {editable && <button className="btn danger small" onClick={() => patchStep(i, { fields: s.fields.filter((_, j) => j !== k) })}>Remove</button>}
-                {ConfigEditor && <div className="cfg"><fieldset disabled={!editable} style={{ border: 0, padding: 0, margin: 0 }}>
-                  <ConfigEditor config={f.config || {}} onChange={(config) => patchField(i, k, { config })} /></fieldset></div>}
+      <h2>Phases</h2>
+      <p className="muted small">A workflow is a sequence of phases. Each phase has steps (shown as tabs) with fields, and ends in a gate review by the project's approvers and authorizers.</p>
+      {draft.phases.map((p, i) => (
+        <div key={i} className={`phase-card ${p.is_start ? "start" : p.is_terminal ? "end" : ""}`}>
+          <button type="button" className="phase-toggle" aria-expanded={open === i} onClick={() => setOpen(open === i ? -1 : i)}>
+            <span>{p.key}</span> {p.name || "Untitled phase"}
+            <span className="muted small"> {p.steps.length} step{p.steps.length === 1 ? "" : "s"}{p.is_start ? ", start" : ""}{p.is_terminal ? ", end" : ""}{p.requires_gate ? "" : ", no gate"}</span>
+          </button>
+          {open === i && (
+            <div className="phase-body">
+              <div className="row">
+                <div style={{ flex: "0 0 90px" }}><label>Key</label><input disabled={!editable} value={p.key} onChange={(e) => renameKey(i, e.target.value)} /></div>
+                <div style={{ flex: "3 1 260px" }}><label>Phase name</label><input disabled={!editable} value={p.name} onChange={(e) => patchPhase(i, { name: e.target.value })} /></div>
               </div>
-            );
-          })}
-          {editable && <button className="btn secondary small" onClick={() => addField(i)}>Add field</button>}
+              <div className="actions" style={{ margin: "10px 0 14px" }}>
+                <label className="check"><input type="radio" name="start" disabled={!editable} checked={p.is_start} onChange={() => patch({ phases: draft.phases.map((x, j) => ({ ...x, is_start: j === i })) })} /> Start phase</label>
+                <label className="check"><input type="checkbox" disabled={!editable} checked={p.is_terminal} onChange={(e) => patchPhase(i, { is_terminal: e.target.checked })} /> End phase</label>
+                <label className="check"><input type="checkbox" disabled={!editable} checked={p.requires_gate} onChange={(e) => patchPhase(i, { requires_gate: e.target.checked })} /> Gate review</label>
+                {editable && <>
+                  <button className="btn secondary small" disabled={i === 0} onClick={() => movePhase(i, -1)}>Move up</button>
+                  <button className="btn secondary small" disabled={i === draft.phases.length - 1} onClick={() => movePhase(i, 1)}>Move down</button>
+                  <button className="btn danger small" onClick={() => removePhase(i)}>Remove phase</button>
+                </>}
+              </div>
+              {p.steps.map((s, k) => (
+                <div className="step-card" key={k}>
+                  <div className="row" style={{ alignItems: "flex-end" }}>
+                    <div style={{ flex: "3 1 260px" }}><label>Step name (tab)</label><input disabled={!editable} value={s.name} onChange={(e) => patchStep(i, k, { name: e.target.value })} /></div>
+                    {editable && <div style={{ flex: "0 0 auto" }}><button className="btn danger small" onClick={() => patchPhase(i, { steps: p.steps.filter((_, j) => j !== k) })}>Remove step</button></div>}
+                  </div>
+                  {!s.fields.length && <p className="muted small">No fields yet.</p>}
+                  {s.fields.map((f, n) => (
+                    <FieldDefEditor key={n} f={f} fieldTypes={fieldTypes} editable={editable}
+                      onChange={(fp) => patchField(i, k, n, fp)}
+                      onRemove={() => patchStep(i, k, { fields: s.fields.filter((_, j) => j !== n) })} />
+                  ))}
+                  {editable && <button className="btn secondary small" onClick={() => addField(i, k)}>Add field</button>}
+                </div>
+              ))}
+              {editable && <button className="btn secondary small" onClick={() => addStep(i)}>Add step</button>}
+            </div>
+          )}
         </div>
       ))}
-      {editable && <button className="btn secondary" onClick={addStep}>Add step</button>}
+      {editable && <button className="btn secondary" onClick={addPhase}>Add phase</button>}
 
-      <h2 style={{ marginTop: 28 }}>Paths between steps</h2>
-      <div className="card">
-        <p className="muted small">After a step is approved, the first matching condition (lowest priority number first) decides the next step. The default path is used when none match.</p>
+      <h2 style={{ marginTop: 28 }}>Paths between phases</h2>
+      <section className="card">
+        <p className="muted small">
+          After a phase passes its gate review, the project moves along its path. For a branch, add one path with a condition and one marked default:
+          the condition is checked first, and the default is taken when it does not match. Conditions can use the fields of the phase being left.
+        </p>
+        {editable && <button className="btn secondary small" style={{ marginBottom: 10 }} disabled={draft.phases.length < 2} onClick={linkInOrder}>Link phases in order</button>}
         {draft.transitions.map((t, i) => (
-          <div className="trans-row" key={i}>
-            <div><label>From</label>
-              <select disabled={!editable} value={t.from_key} onChange={(e) => patchTrans(i, { from_key: e.target.value, condition: null })}>
-                {draft.steps.map((s) => <option key={s.key} value={s.key}>{s.key}</option>)}</select></div>
-            <div><label>To</label>
-              <select disabled={!editable} value={t.to_key} onChange={(e) => patchTrans(i, { to_key: e.target.value })}>
-                {draft.steps.map((s) => <option key={s.key} value={s.key}>{s.key}</option>)}</select></div>
-            <div><label>Priority</label>
-              <input type="number" disabled={!editable} value={t.priority} onChange={(e) => patchTrans(i, { priority: Number(e.target.value) })} /></div>
-            <label className="check" style={{ marginTop: 22 }}><input type="checkbox" disabled={!editable} checked={t.is_default} onChange={(e) => patchTrans(i, { is_default: e.target.checked, condition: e.target.checked ? null : t.condition })} /> Default</label>
-            <div>{t.is_default ? <span className="muted small">Used when no other condition matches.</span>
-              : <ConditionEditor disabled={!editable} value={t.condition} fields={stepFields[t.from_key] || []} onChange={(condition) => patchTrans(i, { condition })} />}</div>
-            {editable && <button className="btn danger small" style={{ marginTop: 22 }} onClick={() => patch({ transitions: draft.transitions.filter((_, j) => j !== i) })}>Remove</button>}
+          <div className="path-row" key={i}>
+            <div><label>From</label><select disabled={!editable} value={t.from_key} onChange={(e) => patchPath(i, { from_key: e.target.value, condition: null })}>
+              {draft.phases.map((p) => <option key={p.key} value={p.key}>{p.name || p.key}</option>)}</select></div>
+            <div><label>To</label><select disabled={!editable} value={t.to_key} onChange={(e) => patchPath(i, { to_key: e.target.value })}>
+              {draft.phases.map((p) => <option key={p.key} value={p.key}>{p.name || p.key}</option>)}</select></div>
+            <div>
+              {outCount(t.from_key) > 1 ? (
+                <>
+                  <label className="check" style={{ marginBottom: 6 }}><input type="checkbox" disabled={!editable} checked={t.is_default}
+                    onChange={(e) => patchPath(i, { is_default: e.target.checked, condition: e.target.checked ? null : t.condition })} /> Default (taken when the condition does not match)</label>
+                  {!t.is_default && <ConditionEditor disabled={!editable} value={t.condition} fields={pathFields(t.from_key)} onChange={(condition) => patchPath(i, { condition })} />}
+                </>
+              ) : <span className="muted small">Only path from this phase, always taken.</span>}
+            </div>
+            {editable ? <button className="btn danger small" onClick={() => patch({ transitions: draft.transitions.filter((_, j) => j !== i) })}>Remove</button> : <div />}
           </div>
         ))}
-        {editable && <button className="btn secondary small" disabled={draft.steps.length < 2} onClick={addTransition}>Add path</button>}
-      </div>
-    </>
+        {editable && <button className="btn secondary small" disabled={draft.phases.length < 2}
+          onClick={() => patch({ transitions: [...draft.transitions, { from_key: draft.phases[0].key, to_key: draft.phases[1].key, condition: null, is_default: false }] })}>Add path</button>}
+      </section>
+    </Page>
   );
 }

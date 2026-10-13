@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { approveUser, fetchUsers, patchUser, resetPassword } from "../slices/usersSlice";
-import { Alert, Chip, Empty, Errors } from "../components/Ui";
+import { Alert, Chip, Empty, Errors, Page } from "../components/Ui";
 
 export default function AdminUsers() {
   const dispatch = useDispatch();
@@ -13,7 +13,7 @@ export default function AdminUsers() {
   const pendingCount = list.filter((u) => u.status === "pending").length;
 
   return (
-    <>
+    <Page>
       <div className="page-head"><div><h1>Users</h1><p className="muted">Approve new accounts, change roles and reset passwords.</p></div>
         <div className="actions">
           <button className={`btn ${tab === "pending" ? "" : "secondary"}`} onClick={() => setTab("pending")}>Waiting for approval ({pendingCount})</button>
@@ -52,6 +52,6 @@ export default function AdminUsers() {
           </table>
         )}
       </div>
-    </>
+    </Page>
   );
 }
